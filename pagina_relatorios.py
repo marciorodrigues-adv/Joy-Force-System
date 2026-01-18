@@ -26,6 +26,14 @@ def pagina_relatorios(db):
                 return s.get("power", 0) or 0
         return 0
 
+    def troop_rank(val):
+        if isinstance(val, str) and val.upper().startswith("T"):
+            try:
+                return int(val.replace("T", ""))
+            except:
+                return 0
+        return 0
+
     # =========================
     # Header
     # =========================
@@ -37,8 +45,6 @@ def pagina_relatorios(db):
             "<h1 style='text-align:center;'>📊 Relatórios de Força</h1>",
             unsafe_allow_html=True
         )
-    with col3:
-        st.write("")
 
     # =========================
     # Dados
@@ -50,14 +56,10 @@ def pagina_relatorios(db):
 
     df = pd.DataFrame(data)
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
-    # Remove timezone do timestamp (MongoDB vem com UTC)
-    df["timestamp"] = df["timestamp"].dt.tz_localize(None)  
-
+    df["timestamp"] = df["timestamp"].dt.tz_localize(None)
     df["power_total"] = pd.to_numeric(df["power_total"], errors="coerce")
 
-    # =========================
-    # User só vê o próprio
-    # =========================
+    # User comum vê apenas seus dados
     if not is_admin:
         df = df[df["player_name"] == user_nickname]
 
@@ -98,8 +100,8 @@ def pagina_relatorios(db):
         # =========================
         st.markdown("### 🏆 Ranking de Força – Última Atualização")
 
-        metric = st.selectbox(
-            "Métrica para ranking",
+        metric_rank = st.selectbox(
+            "Métrica do ranking",
             [
                 "Poder Total",
                 "Drone",
@@ -109,6 +111,7 @@ def pagina_relatorios(db):
                 "Squad 3",
                 "Squad 4",
             ],
+            key="metric_rank"
         )
 
         metric_map = {
@@ -121,48 +124,121 @@ def pagina_relatorios(db):
             "Squad 4": "squad_4",
         }
 
-        metric_col = metric_map[metric]
+        metric_col = metric_map[metric_rank]
         latest = latest.sort_values(metric_col, ascending=False)
 
-        fig, ax = plt.subplots(figsize=(14, 6))
-        players = latest["player_name"]
+        max_players = len(latest)
+        qtde = (
+            max_players if max_players <= 1
+            else st.slider(
+                "Quantidade de jogadores",
+                min_value=1,
+                max_value=max_players,
+                value=min(10, max_players),
+                step=1
+            )
+        )
 
-        if metric == "Squads (Total)":
+        latest_plot = latest.head(qtde)
+
+        fig, ax = plt.subplots(figsize=(14, 6))
+        players = latest_plot["player_name"]
+
+        if metric_rank == "Squads (Total)":
             bottom = np.zeros(len(players))
             colors = ["#4285F4", "#EA4335", "#FBBC05", "#34A853"]
 
             for i, color in zip(range(1, 5), colors):
-                values = latest[f"squad_{i}"].to_numpy()
+                values = latest_plot[f"squad_{i}"].to_numpy()
                 ax.bar(players, values, bottom=bottom, label=f"SQUAD {i}", color=color)
                 bottom += values
 
-            totals = latest["squad_total"].to_numpy()
+            totals = latest_plot["squad_total"].to_numpy()
             for i, total in enumerate(totals):
                 ax.text(i, total + 0.8, f"{total:.2f}", ha="center", fontweight="bold")
 
             ax.legend(ncol=4)
         else:
-            values = latest[metric_col].to_numpy()
+            values = latest_plot[metric_col].to_numpy()
             bars = ax.bar(players, values)
             for bar, val in zip(bars, values):
                 ax.text(
                     bar.get_x() + bar.get_width() / 2,
                     val,
-                    f"{val:.2f}" if metric != "Drone" else f"{int(val)}",
+                    f"{val:.2f}" if metric_rank != "Drone" else f"{int(val)}",
                     ha="center",
                     va="bottom",
                     fontweight="bold",
                 )
 
-        ax.set_title(f"JOY BRASIL – Ranking por {metric}")
+        ax.set_title(f"JOY BRASIL – Ranking por {metric_rank}")
         plt.xticks(rotation=45, ha="right")
         plt.tight_layout()
         st.pyplot(fig)
 
+        # =========================
+        # TABELA RANKING
+        # =========================
+        st.markdown("### 📋 Ranking Detalhado")
+
+        ranking_df = latest[[
+            "player_name",
+            "power_total",
+            "drone_level",
+            "squad_1",
+            "squad_2",
+            "squad_3",
+            "squad_4",
+            "squad_total",
+            "troop_level_max"
+        ]].rename(columns={
+            "player_name": "Jogador",
+            "power_total": "Poder Total",
+            "drone_level": "Drone",
+            "squad_1": "Squad 1",
+            "squad_2": "Squad 2",
+            "squad_3": "Squad 3",
+            "squad_4": "Squad 4",
+            "squad_total": "Squads (Total)",
+            "troop_level_max": "Tropa Máx"
+        })
+
+        order_table = st.selectbox(
+            "Ordenar tabela por",
+            [
+                "Poder Total",
+                "Drone",
+                "Squads (Total)",
+                "Squad 1",
+                "Squad 2",
+                "Squad 3",
+                "Squad 4",
+                "Tropa Máx",
+                "Jogador",
+            ],
+            key="order_table"
+        )
+
+        ranking_df["_tropa_rank"] = ranking_df["Tropa Máx"].apply(troop_rank)
+
+        if order_table == "Tropa Máx":
+            ranking_df = ranking_df.sort_values("_tropa_rank", ascending=False)
+        elif order_table == "Jogador":
+            ranking_df = ranking_df.sort_values("Jogador")
+        else:
+            ranking_df = ranking_df.sort_values(order_table, ascending=False)
+
+        ranking_df = ranking_df.drop(columns=["_tropa_rank"])
+
+        st.dataframe(
+            ranking_df.reset_index(drop=True),
+            use_container_width=True
+        )
+
         st.markdown("---")
 
         # =========================
-        # ALERTA DE ATUALIZAÇÃO
+        # MONITORAMENTO
         # =========================
         st.markdown("### ⏱️ Monitoramento de Atualizações")
 
@@ -176,70 +252,38 @@ def pagina_relatorios(db):
             })
         )
 
-        hoje = pd.Timestamp.now().normalize()
-
+        hoje = pd.Timestamp.now().tz_localize(None).normalize()
         last_update_df["Dias sem atualizar"] = (
             hoje - last_update_df["Última Atualização"]
         ).dt.days
 
         atrasados = last_update_df[last_update_df["Dias sem atualizar"] >= 14]
 
-        if len(atrasados) > 0:
+        if not atrasados.empty:
             st.error(
-                f"🚨 **{len(atrasados)} jogador(es)** estão há **14 dias ou mais sem atualizar**!"
+                f"🚨 {len(atrasados)} jogador(es) sem atualizar há 14 dias ou mais"
             )
         else:
-            st.success("✅ Todos os jogadores atualizaram nos últimos 14 dias.")
-
-        order = st.selectbox(
-            "Ordenar por",
-            [
-                "Mais tempo sem atualizar",
-                "Atualizações mais recentes",
-                "Ordem alfabética",
-            ],
-        )
-
-        if order == "Mais tempo sem atualizar":
-            last_update_df = last_update_df.sort_values("Dias sem atualizar", ascending=False)
-        elif order == "Atualizações mais recentes":
-            last_update_df = last_update_df.sort_values("Última Atualização", ascending=False)
-        else:
-            last_update_df = last_update_df.sort_values("Jogador")
-
-        def highlight(val):
-            if val >= 14:
-                return "background-color: #f8d7da; font-weight: bold"
-            elif val >= 7:
-                return "background-color: #fff3cd"
-            return ""
+            st.success("✅ Todos os jogadores estão atualizados")
 
         st.dataframe(
-            last_update_df.style.applymap(
-                highlight, subset=["Dias sem atualizar"]
-            ),
-            use_container_width=True,
+            last_update_df.sort_values("Dias sem atualizar", ascending=False),
+            use_container_width=True
         )
 
-        st.markdown("---")
-
     # ======================================================
-    # ============ TODOS: EVOLUÇÃO INDIVIDUAL ==============
+    # ============ EVOLUÇÃO INDIVIDUAL =====================
     # ======================================================
     st.markdown("### 📈 Evolução do Jogador ao Longo do Tempo")
 
     if is_admin:
         jogadores = sorted(df["player_name"].unique())
-        selected_player = st.selectbox("Selecionar jogador", jogadores)
+        selected_player = st.selectbox("Selecionar jogador", jogadores, key="player_sel")
     else:
         selected_player = user_nickname
         st.info(f"Exibindo dados do jogador: **{selected_player}**")
 
-    player_df = (
-        df[df["player_name"] == selected_player]
-        .sort_values("timestamp")
-        .copy()
-    )
+    player_df = df[df["player_name"] == selected_player].sort_values("timestamp")
 
     for i in range(1, 5):
         player_df[f"Squad {i}"] = player_df["squads"].apply(
@@ -250,7 +294,7 @@ def pagina_relatorios(db):
         player_df[f"Squad {i}"] for i in range(1, 5)
     )
 
-    metric = st.selectbox(
+    metric_player = st.selectbox(
         "Métrica para visualização",
         [
             "Poder Total",
@@ -261,10 +305,10 @@ def pagina_relatorios(db):
             "Squad 3",
             "Squad 4",
         ],
-        key="player_metric",
+        key="metric_player"
     )
 
-    metric_map = {
+    metric_map_player = {
         "Poder Total": "power_total",
         "Drone": "drone_level",
         "Squads (Total)": "Squads (Total)",
@@ -274,31 +318,15 @@ def pagina_relatorios(db):
         "Squad 4": "Squad 4",
     }
 
-    metric_col = metric_map[metric]
-
     fig, ax = plt.subplots(figsize=(12, 5))
     ax.plot(
         player_df["timestamp"].to_numpy(),
-        player_df[metric_col].to_numpy(),
+        player_df[metric_map_player[metric_player]].to_numpy(),
         marker="o",
         linewidth=2,
     )
 
-    for x, y in zip(
-        player_df["timestamp"].to_numpy(),
-        player_df[metric_col].to_numpy(),
-    ):
-        ax.text(
-            x,
-            y,
-            f"{y:.2f}" if metric != "Drone" else f"{int(y)}",
-            ha="center",
-            fontsize=9,
-        )
-
-    ax.set_title(f"Evolução de {metric} – {selected_player}")
-    ax.set_xlabel("Data")
-    ax.set_ylabel(metric)
+    ax.set_title(f"Evolução de {metric_player} – {selected_player}")
     plt.xticks(rotation=45)
     plt.tight_layout()
     st.pyplot(fig)

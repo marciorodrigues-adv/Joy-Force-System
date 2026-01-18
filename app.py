@@ -63,7 +63,6 @@ with st.sidebar:
     if user_role == "admin":
         menu_options.extend([
             "Gestão de Usuários",
-            "Controle de Ferramentas"
         ])
         menu_icons.extend([
             "people",
